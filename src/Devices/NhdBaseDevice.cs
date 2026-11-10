@@ -22,7 +22,7 @@ namespace PepperDash.Essentials.Plugin
 		public bool Value { get; }
 	}
 
-	public abstract class NhdBaseDevice : EssentialsDevice, IRoutingMidpointWithFeedback, ICommunicationMonitor
+	public abstract class NhdBaseDevice : EssentialsDevice, IRoutingMidpointWithFeedback, ICommunicationMonitor, IHasFeedback
 	{
 		private const long DefaultCommunicationWarningTimeMs = 10000;
 		private const long DefaultCommunicationErrorTimeMs = 30000;
@@ -59,6 +59,12 @@ namespace PepperDash.Essentials.Plugin
 			MatrixOutputSlot = Config.MatrixOutputSlot;
 			IsOnline = new BoolFeedback("IsOnline", () => _online);
 			InputSyncDetected = new BoolFeedback("InputSyncDetected", () => _inputSyncDetected);
+			HdmiOutResolutionFeedback = new StringFeedback("HdmiOutResolution", () => _hdmiOutResolution ?? string.Empty);
+			ActiveLayoutFeedback = new StringFeedback("ActiveLayout", GetActiveLayoutId);
+
+			// Built here so a consumer that subscribes after activation sees the whole list. A
+			// decoder adds its output resolution and layout feedbacks in its own constructor.
+			Feedbacks = new FeedbackCollection<Feedback> { IsOnline, InputSyncDetected };
 		}
 
 		protected NhdDeviceProperties Config { get; private set; }
@@ -72,6 +78,20 @@ namespace PepperDash.Essentials.Plugin
 		public BoolFeedback IsOnline { get; private set; }
 		public bool InputSyncDetectedState => _inputSyncDetected;
 		public BoolFeedback InputSyncDetected { get; private set; }
+
+		/// <summary>The endpoint's keyed state feedbacks, for anything that reads a device's feedback list.</summary>
+		public FeedbackCollection<Feedback> Feedbacks { get; }
+
+		/// <summary>The decoder's HDMI output resolution as last reported by the controller, or empty.</summary>
+		public StringFeedback HdmiOutResolutionFeedback { get; private set; }
+
+		/// <summary>
+		/// The active multiview layout, as the id <see cref="RecallMVLayout"/> takes: "preset:&lt;name&gt;"
+		/// or "custom:&lt;key&gt;", whichever of the two was set most recently, or empty when that one is
+		/// unknown (for example after a runtime-computed layout) or the endpoint is offline.
+		/// </summary>
+		public StringFeedback ActiveLayoutFeedback { get; private set; }
+
 		public int ActiveTileCount { get; private set; }
 		public DateTime? MultiviewStateLastRefreshUtc { get; private set; }
 		public string ActivePresetMultiviewLayoutName { get; private set; }
@@ -270,6 +290,7 @@ namespace PepperDash.Essentials.Plugin
 				_activeMultiviewAudioSeparateSourceReference = null;
 				_activeMultiviewAudioSourceReference = null;
 
+				ActiveLayoutFeedback.FireUpdate();
 				RaiseLayoutChanged();
 			}
 
@@ -339,6 +360,8 @@ namespace PepperDash.Essentials.Plugin
 			_hdmiOutResolution = normalized;
 			_hdmiOutResolutionWidth = parsedWidth;
 			_hdmiOutResolutionHeight = parsedHeight;
+
+			HdmiOutResolutionFeedback.FireUpdate();
 		}
 
 		public bool TryGetCustomMVLayout(string layoutKey, out NhdCustomMultiviewLayoutProperties layout)
@@ -774,6 +797,8 @@ namespace PepperDash.Essentials.Plugin
 			ActivePresetMultiviewLayoutName = normalized;
 			ActivePresetMultiviewLayoutInferred = inferred;
 			ActivePresetMultiviewLayoutLastUpdateUtc = DateTime.UtcNow;
+
+			ActiveLayoutFeedback.FireUpdate();
 		}
 
 		public void SetActiveCustomMVLayout(string layoutKey, bool inferred = false)
@@ -791,6 +816,24 @@ namespace PepperDash.Essentials.Plugin
 			ActiveCustomMultiviewLayoutKey = normalized;
 			ActiveCustomMultiviewLayoutInferred = inferred;
 			ActiveCustomMultiviewLayoutLastUpdateUtc = DateTime.UtcNow;
+
+			ActiveLayoutFeedback.FireUpdate();
+		}
+
+		/// <summary>
+		/// The value of <see cref="ActiveLayoutFeedback"/>. The preset and custom layout names are
+		/// tracked separately and neither clears the other, so the one set most recently is the one
+		/// in effect; a tie goes to the custom layout, which is matched after the preset.
+		/// </summary>
+		private string GetActiveLayoutId()
+		{
+			var presetUpdated = ActivePresetMultiviewLayoutLastUpdateUtc;
+			var customUpdated = ActiveCustomMultiviewLayoutLastUpdateUtc;
+
+			if (customUpdated.HasValue && (!presetUpdated.HasValue || customUpdated.Value >= presetUpdated.Value))
+				return ActiveCustomMultiviewLayoutKey == null ? string.Empty : "custom:" + ActiveCustomMultiviewLayoutKey;
+
+			return ActivePresetMultiviewLayoutName == null ? string.Empty : "preset:" + ActivePresetMultiviewLayoutName;
 		}
 
 		private IEnumerable<NhdCustomMultiviewLayoutProperties> GetAllCustomMultiviewLayoutsByPrecedence()

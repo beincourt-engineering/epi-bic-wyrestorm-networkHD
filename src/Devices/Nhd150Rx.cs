@@ -55,6 +55,9 @@ namespace PepperDash.Essentials.Plugin
 			AddHdmiOutputPort(NhdPortKeys.HdmiOutput1);
 			AddAnalogAudioOutputPort();
 
+			Feedbacks.Add(HdmiOutResolutionFeedback);
+			Feedbacks.Add(ActiveLayoutFeedback);
+
 			for (var tileNumber = 1; tileNumber <= ConfiguredMaxTileCount; tileNumber++)
 			{
 				var tileSink = new NhdMultiviewTileSink(this, tileNumber);
